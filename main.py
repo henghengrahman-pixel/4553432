@@ -354,7 +354,6 @@ async def start_absensi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ Mulai 11:16:00 WIB dihitung TELAT 1 menit.\n"
         "⚠️ Jangan absen sebelum masuk kantor ! .\n"
         f"💸 Denda keterlambatan: {rupiah(DENDA_PER_MENIT)} per menit.\n"
-        "⚠️ Setelah 11:15:59 WIB absen tetap diterima sebagai MISTAKE/TELAT per menit.\n"
     )
     if now < mulai:
         text += "\n\n⏳ STATUS: Absensi belum dibuka."
