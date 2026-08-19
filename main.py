@@ -49,7 +49,9 @@ NOTIF_FILE = os.path.join(DATA_DIR, "notification_history.json")
 LOCK_FILE = os.path.join(DATA_DIR, "bot_instance.lock")
 
 # Satu shift saja.
-# Absensi dibuka 1 jam sebelum batas 11:15 WIB.
+# Absensi dibuka 1 jam sebelum batas normal 11:15 WIB.
+# Setelah 11:15:59 tetap boleh absen sebagai MISTAKE/TELAT sampai 13:14:59.
+# Tepat 13:15:00 absensi ditutup dan laporan dikirim.
 SHIFT_KEY = "shift_utama"
 SHIFT_CONFIG = {
     SHIFT_KEY: {
@@ -59,8 +61,8 @@ SHIFT_CONFIG = {
         "mulai_menit": 15,
         "batas_jam": 11,
         "batas_menit": 15,
-        "notif_jam": 11,
-        "notif_menit": 45,
+        "notif_jam": 13,
+        "notif_menit": 15,
     }
 }
 
@@ -336,18 +338,35 @@ async def start_absensi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     register_member(user, chat)
-    keyboard = [[InlineKeyboardButton(SHIFT_CONFIG[SHIFT_KEY]["button"], callback_data="absen_shift_utama")]]
+    now = datetime.now(TIMEZONE)
+    config = SHIFT_CONFIG[SHIFT_KEY]
+    mulai = now.replace(hour=config["mulai_jam"], minute=config["mulai_menit"], second=0, microsecond=0)
+    batas = now.replace(hour=config["batas_jam"], minute=config["batas_menit"], second=0, microsecond=0)
+    tutup = now.replace(hour=config["notif_jam"], minute=config["notif_menit"], second=0, microsecond=0)
+    keyboard = []
+    if mulai <= now < tutup:
+        keyboard = [[InlineKeyboardButton(SHIFT_CONFIG[SHIFT_KEY]["button"], callback_data="absen_shift_utama")]]
     text = (
-        "📋 ABSENSI CRM/ TELE G-8008 POIPET\n\n"
+        "📋 ABSENSI STAFF CRM / TELE G-8008 POIPET\n\n"
         "🕘 JADWAL ABSENSI\n"
         f"• {shift_time_text()}\n\n"
         "✅ Tepat waktu sampai 11:15:59 WIB.\n"
         "⚠️ Mulai 11:16:00 WIB dihitung TELAT 1 menit.\n"
-        "⚠️ Jangan absen sebelum masuk kantor.\n"
+        "⚠️ Jangan absen sebelum masuk kantor ! .\n"
         f"💸 Denda keterlambatan: {rupiah(DENDA_PER_MENIT)} per menit.\n"
-        "📢 Laporan otomatis dikirim pukul 11:45 WIB."
+        "⚠️ Setelah 11:15:59 WIB absen tetap diterima sebagai MISTAKE/TELAT per menit.\n"
     )
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    if now < mulai:
+        text += "\n\n⏳ STATUS: Absensi belum dibuka."
+    elif now >= tutup:
+        text += "\n\n🔒 STATUS: Absensi hari ini sudah ditutup."
+    elif now >= batas + timedelta(minutes=1):
+        text += "\n\n⚠️ STATUS: Absensi masih dibuka, tetapi sudah masuk MISTAKE/TELAT per menit."
+    else:
+        text += "\n\n🟢 STATUS: Absensi sedang dibuka dan masih tepat waktu."
+
+    reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    await update.message.reply_text(text, reply_markup=reply_markup)
 
 
 async def handle_absen(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -380,12 +399,25 @@ async def handle_absen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 11:15:00 s.d. 11:15:59 masih tepat waktu. 11:16:00 = telat 1 menit.
-    mulai_denda = batas + timedelta(minutes=1)
+    # Batas NORMAL adalah 11:15:59 WIB.
+    # Mulai 11:16:00 tetap boleh absen tetapi dihitung MISTAKE/TELAT per menit.
+    # Tepat 13:15:00 absensi ditutup total sampai window hari berikutnya.
+    tutup = now.replace(hour=config["notif_jam"], minute=config["notif_menit"], second=0, microsecond=0)
+    if now >= tutup:
+        await query.message.reply_text(
+            "🔒 ABSENSI SUDAH DITUTUP\n\n"
+            "Absensi ditutup pukul 13:15:00 WIB.\n"
+            "Silakan menunggu absensi berikutnya dibuka pukul 10:15 WIB."
+        )
+        return
+
     telat_menit = 0
-    if now >= mulai_denda:
-        telat_menit = int((now - mulai_denda).total_seconds() // 60) + 1
-    denda = telat_menit * DENDA_PER_MENIT
+    denda = 0
+    mulai_telat = batas + timedelta(minutes=1)  # 11:16:00
+    if now >= mulai_telat:
+        # 11:16:00-11:16:59 = 1 menit, 11:17:00-11:17:59 = 2 menit, dst.
+        telat_menit = int((now - mulai_telat).total_seconds() // 60) + 1
+        denda = telat_menit * DENDA_PER_MENIT
 
     today = ensure_today()
     uid = str(user.id)
@@ -417,14 +449,14 @@ async def handle_absen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🕘 Jam Absensi: {now.strftime('%H:%M:%S')} WIB"
     )
     if telat_menit > 0:
-        pesan += f"\n\n⚠️ Keterlambatan: {telat_menit} menit\n💸 Denda: {rupiah(denda)}"
+        pesan += f"\n\n⚠️ MISTAKE/TELAT: {telat_menit} menit\n💸 Denda: {rupiah(denda)}"
         await kirim_admin(
             context,
-            "🚨 STAFF TELAT ABSENSI\n\n"
+            "🚨 STAFF MISTAKE/TELAT ABSENSI\n\n"
             f"👥 Grup: {chat.title or '-'}\n"
             f"👤 Staff: {user.full_name}\n"
             f"🕘 Jam Absensi: {now.strftime('%H:%M:%S')} WIB\n"
-            f"⚠️ Telat: {telat_menit} menit\n"
+            f"⚠️ Mistake/Telat: {telat_menit} menit\n"
             f"💸 Denda: {rupiah(denda)}",
         )
     await query.message.reply_text(pesan)
@@ -445,7 +477,7 @@ async def reset_shift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✅ DATA SHIFT STAFF BERHASIL DISET\n\n"
         f"👤 Staff: {target.full_name}\n"
-        "📌 Shift: SHIFT UTAMA (11.15 WIB)"
+        "📌 Shift: SHIFT UTAMA — batas tepat waktu 11.15 WIB"
     )
 
 
@@ -457,7 +489,7 @@ async def reset_shift_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shift_history[str(uid)] = SHIFT_KEY
     save_shift_history()
     await update.message.reply_text(
-        f"✅ Semua staff ({len(members)}) sudah ditetapkan ke SHIFT UTAMA, paling lambat 11.15 WIB."
+        f"✅ Semua staff ({len(members)}) sudah ditetapkan ke SHIFT UTAMA — batas tepat waktu 11.15 WIB, tutup 13.15 WIB."
     )
 
 
@@ -467,7 +499,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     today = ensure_today()
     data = absensi[today].get(SHIFT_KEY, {})
-    lines = ["📋 STATUS ABSENSI HARI INI", "", "🕘 Shift utama — paling lambat 11.15 WIB", ""]
+    lines = ["📋 STATUS ABSENSI HARI INI", "", "🕘 Shift utama — batas tepat waktu 11.15 WIB | tutup 13.15 WIB", ""]
     if not data:
         lines.append("Belum ada absensi.")
     else:
@@ -487,7 +519,7 @@ async def list_shift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or not is_owner_admin(user.id) or not update.message:
         return
-    lines = ["📋 DATA STAFF — SHIFT UTAMA 11.15 WIB", ""]
+    lines = ["📋 DATA STAFF — SHIFT UTAMA | BATAS TEPAT WAKTU 11.15 WIB", ""]
     if not members:
         lines.append("Belum ada data staff.")
     else:
@@ -523,8 +555,9 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/ping - Cek bot online\n"
         "/resetshift - Reply staff, set ke shift utama\n"
         "/resetshiftall - Set semua staff ke shift utama\n\n"
-        "🕘 Absensi buka 10.15 WIB, paling lambat 11.15 WIB.\n"
-        "📢 Laporan otomatis 11.45 WIB."
+        "🕘 Absensi buka 10.15 WIB; tepat waktu sampai 11.15:59 WIB.\n"
+        "⚠️ Mulai 11.16 WIB tetap bisa absen, tetapi masuk MISTAKE/TELAT per menit.\n"
+        "🔒 Pukul 13.15 WIB absensi ditutup dan laporan langsung dikirim."
     )
     await update.message.reply_text(text)
 
@@ -533,13 +566,12 @@ async def cek_absensi(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(TIMEZONE)
     today = ensure_today()
     config = SHIFT_CONFIG[SHIFT_KEY]
-    notif_key = f"{today}-{SHIFT_KEY}-laporan-30-menit"
+    notif_key = f"{today}-{SHIFT_KEY}-laporan-2-jam"
 
     if notification_history.get(today, {}).get(notif_key):
         return
 
-    jadwal = now.replace(hour=config["batas_jam"], minute=config["batas_menit"], second=0, microsecond=0)
-    waktu_laporan = jadwal + timedelta(minutes=30)
+    waktu_laporan = now.replace(hour=config["notif_jam"], minute=config["notif_menit"], second=0, microsecond=0)
     if now < waktu_laporan:
         return
 
@@ -583,8 +615,9 @@ async def cek_absensi(context: ContextTypes.DEFAULT_TYPE):
         "",
         f"📅 Tanggal: {now.strftime('%d-%m-%Y')}",
         "📌 Shift: SHIFT UTAMA",
-        "🕘 Paling lambat: 11.15 WIB",
-        "📢 Laporan: 11.45 WIB",
+        "🕘 Batas tepat waktu: 11.15:59 WIB",
+        "⚠️ Mulai mistake/telat: 11.16:00 WIB",
+        "🔒 Tutup absensi + laporan: 13.15 WIB",
         f"👥 Total staff: {len(staff)}",
         "",
         f"❌ TIDAK ABSEN ({len(tidak_absen)})",
@@ -594,10 +627,10 @@ async def cek_absensi(context: ContextTypes.DEFAULT_TYPE):
     else:
         lines.append("- Tidak ada")
 
-    lines.extend(["", f"⚠️ TERLAMBAT ({len(telat)})"])
+    lines.extend(["", f"⚠️ MISTAKE/TELAT ({len(telat)})"])
     if telat:
         for i, (nama, jam, menit, denda) in enumerate(telat, 1):
-            lines.append(f"{i}. {nama} — {jam} WIB — Telat {menit} menit — Denda {rupiah(denda)}")
+            lines.append(f"{i}. {nama} — {jam} WIB — Mistake/Telat {menit} menit — Denda {rupiah(denda)}")
     else:
         lines.append("- Tidak ada")
 
@@ -681,7 +714,7 @@ def main():
     app = build_app()
 
     print("BOT ABSENSI AKTIF")
-    print("MODE: 1 SHIFT | BUKA 10:15 WIB | BATAS 11:15 WIB | LAPORAN 11:45 WIB")
+    print("MODE: 1 SHIFT | BUKA 10:15 | NORMAL s/d 11:15:59 | MISTAKE 11:16-13:14:59 | TUTUP+LAPORAN 13:15")
     print("SINGLE-INSTANCE LOCK: AKTIF")
 
     # allowed_updates=Update.ALL_TYPES diperlukan agar bot tetap menerima event
