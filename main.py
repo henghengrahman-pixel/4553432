@@ -47,7 +47,7 @@ SHIFT_CONFIG = {
     "shift_utama": {
         "label": "SHIFT UTAMA",
         "button": "📝 ABSEN",
-        "mulai_jam": 10,
+        "mulai_jam": 09,
         "mulai_menit": 15,
         "batas_jam": 11,
         "batas_menit": 15,
