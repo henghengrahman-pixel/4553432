@@ -338,10 +338,9 @@ async def start_absensi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_member(user, chat)
     keyboard = [[InlineKeyboardButton(SHIFT_CONFIG[SHIFT_KEY]["button"], callback_data="absen_shift_utama")]]
     text = (
-        "📋 ABSENSI STAFF G-8008 POIPET\n\n"
+        "📋 ABSENSI CRM/ TELE G-8008 POIPET\n\n"
         "🕘 JADWAL ABSENSI\n"
         f"• {shift_time_text()}\n\n"
-        "✅ Hanya 1 shift.\n"
         "✅ Tepat waktu sampai 11:15:59 WIB.\n"
         "⚠️ Mulai 11:16:00 WIB dihitung TELAT 1 menit.\n"
         "⚠️ Jangan absen sebelum masuk kantor.\n"
